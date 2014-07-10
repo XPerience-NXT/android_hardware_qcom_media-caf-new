@@ -47,6 +47,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <string.h>
 #include <inttypes.h>
 #include <cstddef>
+#include <cutils/atomic.h>
 
 static ptrdiff_t x;
 
@@ -751,6 +752,7 @@ class omx_vdec: public qc_omx_component
         pthread_mutex_t       c_lock;
         //sem to handle the minimum procesing of commands
         sem_t                 m_cmd_lock;
+        sem_t                 m_safe_flush;
         bool              m_error_propogated;
         // compression format
         OMX_VIDEO_CODINGTYPE eCompressionFormat;
@@ -871,6 +873,7 @@ class omx_vdec: public qc_omx_component
         bool m_use_android_native_buffers;
         bool m_debug_extradata;
         bool m_debug_concealedmb;
+        bool m_disable_dynamic_buf_mode;
         OMX_U32 m_conceal_color;
 #endif
 #ifdef MAX_RES_1080P
@@ -935,6 +938,7 @@ class omx_vdec: public qc_omx_component
         OMX_U32 m_smoothstreaming_width;
         OMX_U32 m_smoothstreaming_height;
         OMX_ERRORTYPE enable_smoothstreaming();
+        OMX_ERRORTYPE enable_adaptive_playback(unsigned long width, unsigned long height);
 
         unsigned int m_fill_output_msg;
         bool client_set_fps;
@@ -995,6 +999,8 @@ class omx_vdec: public qc_omx_component
         void send_codec_config();
 #endif
         OMX_TICKS m_last_rendered_TS;
+
+        volatile int32_t m_queued_codec_config_count;
 };
 
 #ifdef _MSM8974_
