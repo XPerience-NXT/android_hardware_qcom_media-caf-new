@@ -2735,40 +2735,18 @@ OMX_ERRORTYPE  omx_vdec::get_parameter(OMX_IN OMX_HANDLETYPE     hComp,
                                     }
                                 } else if (1 == portFmt->nPortIndex) {
                                     portFmt->eCompressionFormat =  OMX_VIDEO_CodingUnused;
-                                    //On Android, we default to standard YUV formats for non-surface use-cases
-                                    //where apps prefer known color formats.
-                                    OMX_COLOR_FORMATTYPE formatsNonSurfaceMode[] = {
-                                        [0] = OMX_COLOR_FormatYUV420SemiPlanar,
-                                        [1] = OMX_COLOR_FormatYUV420Planar,
-                                        [2] = (OMX_COLOR_FORMATTYPE)QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m,
-                                    };
-                                    //for surface mode (normal playback), advertise native/accelerated formats first
-                                    OMX_COLOR_FORMATTYPE formatsDefault[] = {
-                                        [0] = (OMX_COLOR_FORMATTYPE)QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m,
-                                        [1] = OMX_COLOR_FormatYUV420Planar,
-                                        [2] = OMX_COLOR_FormatYUV420SemiPlanar,
-                                    };
-#if _ANDROID_
-                                    //Distinguish non-surface mode from normal playback use-case based on
-                                    //usage hinted via "OMX.google.android.index.useAndroidNativeBuffer2"
-                                    OMX_COLOR_FORMATTYPE *colorFormats =
-                                            m_enable_android_native_buffers ? formatsDefault : formatsNonSurfaceMode;
-                                    OMX_U32 maxIndex =
-                                            m_enable_android_native_buffers ? sizeof(formatsDefault) : sizeof(formatsNonSurfaceMode);
-                                    maxIndex /= sizeof(OMX_COLOR_FORMATTYPE);
-#else
-                                    OMX_COLOR_FORMATTYPE *colorFormats = formatsDefault;
-                                    OMX_U32 maxIndex = sizeof(formatsDefault) / sizeof(OMX_COLOR_FORMATTYPE);
-#endif
 
-                                    if (portFmt->nIndex < maxIndex) {
-                                        portFmt->eColorFormat = colorFormats[portFmt->nIndex];
-                                    } else {
-                                        eRet = OMX_ErrorNoMore;
+                                    if (0 == portFmt->nIndex)
+                                        portFmt->eColorFormat = (OMX_COLOR_FORMATTYPE)
+                                            QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m;
+                                    else if (1 == portFmt->nIndex)
+                                        portFmt->eColorFormat = OMX_COLOR_FormatYUV420Planar;
+                                    else {
                                         DEBUG_PRINT_LOW("get_parameter: OMX_IndexParamVideoPortFormat:"\
                                                 " NoMore Color formats");
+                                        eRet =  OMX_ErrorNoMore;
                                     }
-                                    DEBUG_PRINT_HIGH("returning color-format: 0x%x", portFmt->eColorFormat);
+                                    DEBUG_PRINT_LOW("returning %d", portFmt->eColorFormat);
                                 } else {
                                     DEBUG_PRINT_ERROR("get_parameter: Bad port index %d",
                                             (int)portFmt->nPortIndex);
@@ -3201,9 +3179,12 @@ OMX_ERRORTYPE  omx_vdec::set_parameter(OMX_IN OMX_HANDLETYPE     hComp,
                                     enum vdec_output_fromat op_format;
                                     if ((portFmt->eColorFormat == (OMX_COLOR_FORMATTYPE)
                                                 QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m) ||
-                                            (portFmt->eColorFormat == OMX_COLOR_FormatYUV420Planar) ||
-                                            (portFmt->eColorFormat == OMX_COLOR_FormatYUV420SemiPlanar))
+                                            (portFmt->eColorFormat == OMX_COLOR_FormatYUV420Planar))
                                         op_format = (enum vdec_output_fromat)VDEC_YUV_FORMAT_NV12;
+                                    else if (portFmt->eColorFormat ==
+                                            (OMX_COLOR_FORMATTYPE)
+                                            QOMX_COLOR_FormatYUV420PackedSemiPlanar64x32Tile2m8ka)
+                                        op_format = VDEC_YUV_FORMAT_TILE_4x2;
                                     else
                                         eRet = OMX_ErrorBadParameter;
 
@@ -3309,8 +3290,9 @@ OMX_ERRORTYPE  omx_vdec::set_parameter(OMX_IN OMX_HANDLETYPE     hComp,
                                           DEBUG_PRINT_ERROR("Setparameter: unknown Index %s", comp_role->cRole);
                                           eRet = OMX_ErrorUnsupportedSetting;
                                       }
-                                  } else if ((!strncmp(drv_ctx.kind, "OMX.qcom.video.decoder.divx",OMX_MAX_STRINGNAME_SIZE)) ||
-                                          (!strncmp(drv_ctx.kind, "OMX.qcom.video.decoder.divx311",OMX_MAX_STRINGNAME_SIZE))
+                                  } else if ((!strncmp(drv_ctx.kind, "OMX.qcom.video.decoder.divx", OMX_MAX_STRINGNAME_SIZE)) ||
+                                          (!strncmp(drv_ctx.kind, "OMX.qcom.video.decoder.divx311", OMX_MAX_STRINGNAME_SIZE)) ||
+                                          (!strncmp(drv_ctx.kind, "OMX.qcom.video.decoder.divx4", OMX_MAX_STRINGNAME_SIZE))
                                         ) {
                                       if (!strncmp((const char*)comp_role->cRole,"video_decoder.divx",OMX_MAX_STRINGNAME_SIZE)) {
                                           strlcpy((char*)m_cRole,"video_decoder.divx",OMX_MAX_STRINGNAME_SIZE);
@@ -3648,8 +3630,36 @@ OMX_ERRORTYPE  omx_vdec::set_parameter(OMX_IN OMX_HANDLETYPE     hComp,
                              maxSmoothStreamingWidth, maxSmoothStreamingHeight);
                     eRet = OMX_ErrorBadParameter;
                 } else {
-                    eRet = enable_adaptive_playback(pParams->nMaxFrameWidth, pParams->nMaxFrameHeight);
-                }
+                    eRet = enable_smoothstreaming();
+                    if (eRet != OMX_ErrorNone) {
+                         DEBUG_PRINT_ERROR("Failed to enable Adaptive Playback on driver.");
+                         eRet = OMX_ErrorHardware;
+                     } else  {
+                         DEBUG_PRINT_HIGH("Enabling Adaptive playback for %lu x %lu",
+                                 pParams->nMaxFrameWidth, pParams->nMaxFrameHeight);
+                         m_smoothstreaming_mode = true;
+                         m_smoothstreaming_width = pParams->nMaxFrameWidth;
+                         m_smoothstreaming_height = pParams->nMaxFrameHeight;
+                     }
+                     struct v4l2_format fmt;
+                     update_resolution(m_smoothstreaming_width, m_smoothstreaming_height,
+                                                  m_smoothstreaming_width, m_smoothstreaming_height);
+                     eRet = is_video_session_supported();
+                     if (eRet)
+                         break;
+                     fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+                     fmt.fmt.pix_mp.height = drv_ctx.video_resolution.frame_height;
+                     fmt.fmt.pix_mp.width = drv_ctx.video_resolution.frame_width;
+                     fmt.fmt.pix_mp.pixelformat = output_capability;
+                     DEBUG_PRINT_LOW("fmt.fmt.pix_mp.height = %d , fmt.fmt.pix_mp.width = %d",
+                                                     fmt.fmt.pix_mp.height,fmt.fmt.pix_mp.width);
+                     ret = ioctl(drv_ctx.video_driver_fd, VIDIOC_S_FMT, &fmt);
+                     if (ret) {
+                         DEBUG_PRINT_ERROR("Set Resolution failed");
+                         eRet = OMX_ErrorUnsupportedSetting;
+                     } else
+                         eRet = get_buffer_req(&drv_ctx.op_buf);
+                 }
             } else {
                 DEBUG_PRINT_ERROR(
                         "Prepare for adaptive playback supported only on output port");
@@ -4238,8 +4248,6 @@ OMX_ERRORTYPE  omx_vdec::use_output_buffer(
                         drv_ctx.op_buf.buffer_size, (OMX_U32)handle->size);
                 return OMX_ErrorBadParameter;
             }
-
-            drv_ctx.op_buf.buffer_size = handle->size;
 
             if (!m_use_android_native_buffers) {
                 if (!secure_mode) {
@@ -5868,12 +5876,6 @@ OMX_ERRORTYPE  omx_vdec::fill_this_buffer(OMX_IN OMX_HANDLETYPE  hComp,
         //Store private handle from GraphicBuffer
         native_buffer[nPortIndex].privatehandle = handle;
         native_buffer[nPortIndex].nativehandle = handle;
-
-        //buffer->nAllocLen will be sizeof(struct VideoDecoderOutputMetaData). Overwrite
-        //this with a more sane size so that we don't compensate in rest of code
-        //We'll restore this size later on, so that it's transparent to client
-        buffer->nFilledLen = 0;
-        buffer->nAllocLen = handle->size;
     }
 
     if (m_state == OMX_StateInvalid) {
@@ -6632,15 +6634,6 @@ OMX_ERRORTYPE omx_vdec::fill_buffer_done(OMX_HANDLETYPE hComp,
         }
     }
 
-    /* Since we're passing around handles, adjust nFilledLen and nAllocLen
-     * to size of the handle.  Do it _after_ handle_extradata() which
-     * requires the respective sizes to be accurate. */
-    if (dynamic_buf_mode) {
-        buffer->nAllocLen = sizeof(struct VideoDecoderOutputMetaData);
-        buffer->nFilledLen = buffer->nFilledLen ?
-            sizeof(struct VideoDecoderOutputMetaData) : 0;
-    }
-
     if (m_cb.FillBufferDone) {
         if (buffer->nFilledLen > 0) {
             if (arbitrary_bytes)
@@ -6923,7 +6916,10 @@ int omx_vdec::async_message_process (void *context, void* message)
                     ((omxhdr - omx->m_out_mem_ptr) < (int)omx->drv_ctx.op_buf.actualcount) &&
                     (((struct vdec_output_frameinfo *)omxhdr->pOutputPortPrivate
                       - omx->drv_ctx.ptr_respbuffer) < (int)omx->drv_ctx.op_buf.actualcount)) {
-                if (vdec_msg->msgdata.output_frame.len <=  omxhdr->nAllocLen) {
+                if (omx->dynamic_buf_mode && vdec_msg->msgdata.output_frame.len) {
+                    vdec_msg->msgdata.output_frame.len = omxhdr->nAllocLen;
+                }
+                if ( vdec_msg->msgdata.output_frame.len <=  omxhdr->nAllocLen) {
                     omxhdr->nFilledLen = vdec_msg->msgdata.output_frame.len;
                     omxhdr->nOffset = vdec_msg->msgdata.output_frame.offset;
                     omxhdr->nTimeStamp = vdec_msg->msgdata.output_frame.time_stamp;
@@ -9196,7 +9192,6 @@ omx_vdec::allocate_color_convert_buf::allocate_color_convert_buf()
     omx = NULL;
     init_members();
     ColorFormat = OMX_COLOR_FormatMax;
-    dest_format = YCbCr420P;
 }
 
 void omx_vdec::allocate_color_convert_buf::set_vdec_client(void *client)
@@ -9248,7 +9243,7 @@ bool omx_vdec::allocate_color_convert_buf::update_buffer_req()
     c2d.close();
     status = c2d.open(omx->drv_ctx.video_resolution.frame_height,
             omx->drv_ctx.video_resolution.frame_width,
-            NV12_128m,dest_format);
+            NV12_128m,YCbCr420P);
     if (status) {
         status = c2d.get_buffer_size(C2D_INPUT,src_size);
         if (status)
@@ -9295,14 +9290,11 @@ bool omx_vdec::allocate_color_convert_buf::set_color_format(
     }
     if (status && (drv_color_format != dest_color_format)) {
         DEBUG_PRINT_LOW("Enabling C2D");
-        if ((dest_color_format != OMX_COLOR_FormatYUV420Planar) &&
-           (dest_color_format != OMX_COLOR_FormatYUV420SemiPlanar)) {
+        if (dest_color_format != OMX_COLOR_FormatYUV420Planar) {
             DEBUG_PRINT_ERROR("Unsupported color format for c2d");
             status = false;
         } else {
-            ColorFormat = dest_color_format;
-            dest_format = (dest_color_format == OMX_COLOR_FormatYUV420Planar) ?
-                    YCbCr420P : YCbCr420SP;
+            ColorFormat = OMX_COLOR_FormatYUV420Planar;
             if (enabled)
                 c2d.destroy();
             enabled = false;
@@ -9544,11 +9536,10 @@ bool omx_vdec::allocate_color_convert_buf::get_color_format(OMX_COLOR_FORMATTYPE
         else
             status = false;
     } else {
-        if (ColorFormat == OMX_COLOR_FormatYUV420Planar ||
-            ColorFormat == OMX_COLOR_FormatYUV420SemiPlanar) {
-            dest_color_format = ColorFormat;
-        } else
+        if (ColorFormat != OMX_COLOR_FormatYUV420Planar) {
             status = false;
+        } else
+            dest_color_format = OMX_COLOR_FormatYUV420Planar;
     }
     return status;
 }
@@ -9612,97 +9603,6 @@ void omx_vdec::buf_ref_remove(OMX_U32 fd, OMX_U32 offset)
         DEBUG_PRINT_ERROR("Error - could not remove ref, no match with any entry in list");
     }
     pthread_mutex_unlock(&m_lock);
-}
-
-OMX_ERRORTYPE omx_vdec::enable_adaptive_playback(unsigned long nMaxFrameWidth,
-                            unsigned long nMaxFrameHeight)
-{
-
-    OMX_ERRORTYPE eRet = OMX_ErrorNone;
-    int ret = 0;
-    unsigned long min_res_buf_count = 0;
-
-    eRet = enable_smoothstreaming();
-    if (eRet != OMX_ErrorNone) {
-         DEBUG_PRINT_ERROR("Failed to enable Adaptive Playback on driver");
-         return eRet;
-     }
-
-     DEBUG_PRINT_HIGH("Enabling Adaptive playback for %lu x %lu",
-             nMaxFrameWidth,
-             nMaxFrameHeight);
-     m_smoothstreaming_mode = true;
-     m_smoothstreaming_width = nMaxFrameWidth;
-     m_smoothstreaming_height = nMaxFrameHeight;
-
-     //Get upper limit buffer count for min supported resolution
-     struct v4l2_format fmt;
-     fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-     fmt.fmt.pix_mp.height = m_decoder_capability.min_height;
-     fmt.fmt.pix_mp.width = m_decoder_capability.min_width;
-     fmt.fmt.pix_mp.pixelformat = output_capability;
-
-     ret = ioctl(drv_ctx.video_driver_fd, VIDIOC_S_FMT, &fmt);
-     if (ret) {
-         DEBUG_PRINT_ERROR("Set Resolution failed for HxW = %ux%u",
-                           m_decoder_capability.min_height,
-                           m_decoder_capability.min_width);
-         return OMX_ErrorUnsupportedSetting;
-     }
-
-     eRet = get_buffer_req(&drv_ctx.op_buf);
-     if (eRet != OMX_ErrorNone) {
-         DEBUG_PRINT_ERROR("failed to get_buffer_req");
-         return eRet;
-     }
-
-     min_res_buf_count = drv_ctx.op_buf.mincount;
-     DEBUG_PRINT_LOW("enable adaptive - upper limit buffer count = %lu for HxW %ux%u",
-                     min_res_buf_count, m_decoder_capability.min_height, m_decoder_capability.min_width);
-
-     update_resolution(m_smoothstreaming_width, m_smoothstreaming_height,
-                       m_smoothstreaming_width, m_smoothstreaming_height);
-     eRet = is_video_session_supported();
-     if (eRet != OMX_ErrorNone) {
-         DEBUG_PRINT_ERROR("video session is not supported");
-         return eRet;
-     }
-
-     //Get upper limit buffer size for max smooth streaming resolution set
-     fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-     fmt.fmt.pix_mp.height = drv_ctx.video_resolution.frame_height;
-     fmt.fmt.pix_mp.width = drv_ctx.video_resolution.frame_width;
-     fmt.fmt.pix_mp.pixelformat = output_capability;
-     ret = ioctl(drv_ctx.video_driver_fd, VIDIOC_S_FMT, &fmt);
-     if (ret) {
-         DEBUG_PRINT_ERROR("Set Resolution failed for adaptive playback");
-         return OMX_ErrorUnsupportedSetting;
-     }
-
-     eRet = get_buffer_req(&drv_ctx.op_buf);
-     if (eRet != OMX_ErrorNone) {
-         DEBUG_PRINT_ERROR("failed to get_buffer_req!!");
-         return eRet;
-     }
-     DEBUG_PRINT_LOW("enable adaptive - upper limit buffer size = %u",
-                     drv_ctx.op_buf.buffer_size);
-
-     drv_ctx.op_buf.mincount = min_res_buf_count;
-     drv_ctx.op_buf.actualcount = min_res_buf_count;
-     eRet = set_buffer_req(&drv_ctx.op_buf);
-     if (eRet != OMX_ErrorNone) {
-         DEBUG_PRINT_ERROR("failed to set_buffer_req");
-         return eRet;
-     }
-
-     eRet = get_buffer_req(&drv_ctx.op_buf);
-     if (eRet != OMX_ErrorNone) {
-         DEBUG_PRINT_ERROR("failed to get_buffer_req!!!");
-         return eRet;
-     }
-     DEBUG_PRINT_HIGH("adaptive playback enabled, buf count = %u bufsize = %u",
-                      drv_ctx.op_buf.mincount, drv_ctx.op_buf.buffer_size);
-     return eRet;
 }
 
 #ifdef _MSM8974_
